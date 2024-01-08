@@ -1,0 +1,163 @@
+# DISCLAIMER :
+# While this compose has extra work to ensure robustness,
+# it was deleveloped on an arm64 arch. 
+# Unexpected behaviors may arise on amd64 computers.
+
+version: '3.8'
+
+services:
+  postgres:
+    image: bitnami/postgresql:16.1.0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: your_database
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./logs/postgres:/var/log/postgres
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 500M
+        reservations:
+          cpus: '0.25'
+          memory: 200M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal_network
+
+  zookeeper:
+    image: bitnami/zookeeper:3.9.1
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    volumes:
+      - ./logs/zookeeper:/var/log/zookeeper
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - internal_network
+
+  kafka:
+    image: bitnami/kafka:3.6.1
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: "your_topic:1:1"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs/kafka:/var/log/kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 1G
+        reservations:
+          cpus: '0.50'
+          memory: 500M
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --list --bootstrap-server localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - internal_network
+    ports:
+      - '9092:9092'
+      - '29092:29092'
+
+  mongo:
+    image: mongo:7.0.4
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./logs/mongo:/var/log/mongo
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  debezium:
+    image: debezium/connect:2.5
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+    volumes:
+      - ./logs/debezium:/var/log/debezium
+    depends_on:
+      - zookeeper
+      - kafka
+      - postgres
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - internal_network
+
+  elasticsearch:
+    image: bitnami/elasticsearch:8.11.3
+    environment:
+      - discovery.type=single-node
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - internal_network
+
+  logstash:
+    image: bitnami/logstash:8.11.3
+    volumes:
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./logs/postgres:/var/log/postgres
+      - ./logs/zookeeper:/var/log/zookeeper
+      - ./logs/kafka:/var/log/kafka
+      - ./logs/mongo:/var/log/mongo
+      - ./logs/debezium:/var/log/debezium
+    depends_on:
+      - elasticsearch
+    networks:
+      - internal_network
+
+  kibana:
+    image: bitnami/kibana:8.11.3
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+    networks:
+      - internal_network
+
+networks:
+  internal_network:
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
+  postgres-data:
+  mongo-data:
