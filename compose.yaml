@@ -1,20 +1,17 @@
-# DISCLAIMER :
-# While this compose has extra work to ensure robustness,
-# it was deleveloped on an arm64 arch. 
-# Unexpected behaviors may arise on amd64 computers.
-
 version: '3.8'
 
 services:
   postgres:
     image: bitnami/postgresql:16.1.0
+    volumes:
+      - ./postgresql-conf/postgresql.conf:/opt/bitnami/postgresql/conf/postgresql.conf
+      - ./postgresql-conf/pg_hba.conf:/opt/bitnami/postgresql/conf/pg_hba.conf
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgresql-conf/init-user.sql:/docker-entrypoint-initdb.d/init-user.sql
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: your_database
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./logs/postgres:/var/log/postgres
     restart: on-failure
     deploy:
       resources:
@@ -48,7 +45,7 @@ services:
       - internal_network
 
   kafka:
-    image: bitnami/kafka:3.6.1
+    build : ./kafka_image
     environment:
       KAFKA_ADVERTISED_HOST_NAME: kafka
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -120,44 +117,20 @@ services:
     networks:
       - internal_network
 
-  elasticsearch:
-    image: bitnami/elasticsearch:8.11.3
-    environment:
-      - discovery.type=single-node
+  connector-deployer:
+    build: ./curl_image
     volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
-    networks:
-      - internal_network
-
-  logstash:
-    image: bitnami/logstash:8.11.3
-    volumes:
-      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
-      - ./logstash/pipeline:/usr/share/logstash/pipeline
-      - ./logs/postgres:/var/log/postgres
-      - ./logs/zookeeper:/var/log/zookeeper
-      - ./logs/kafka:/var/log/kafka
-      - ./logs/mongo:/var/log/mongo
-      - ./logs/debezium:/var/log/debezium
+      - ./deploy-connector.sh:/deploy-connector.sh
+      - ./debezium-connector.json:/debezium-connector.json
     depends_on:
-      - elasticsearch
-    networks:
-      - internal_network
-
-  kibana:
-    image: bitnami/kibana:8.11.3
-    depends_on:
-      - elasticsearch
-    ports:
-      - "5601:5601"
-    networks:
-      - internal_network
+      - debezium
+      - kafka
+    command: ["sh", "/deploy-connector.sh"]
 
 networks:
   internal_network:
     driver: bridge
 
 volumes:
-  elasticsearch-data:
   postgres-data:
   mongo-data:
